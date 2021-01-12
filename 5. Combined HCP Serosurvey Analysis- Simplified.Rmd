@@ -1,0 +1,1613 @@
+---
+title: "Combined HCP Serosurvey"
+author: "Julia Baker"
+date: "01/12/2021"
+output:
+  html_document: default
+  pdf_document: default
+  always_allow_html: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, echo=FALSE, results="hide", message=FALSE, warning=FALSE}
+
+# load libraries
+  library(tidyverse)
+  library(dplyr)
+  library(readxl)
+  library(knitr)
+  library(kableExtra)
+  library(RColorBrewer)
+  library(scales)
+  library(stringr) 
+  library(data.table)
+  library(janitor)
+  library(lme4)
+
+
+#install.packages('tinytex')
+#tinytex::install_tinytex()
+
+# set working directory
+  setwd("/Users/juliabaker/Box Sync/Combined HCP serosurvey/Analysis/")
+  
+```
+
+
+```{r, echo=FALSE, results="hide", message=FALSE, warning=FALSE}
+
+# load serosurvey data from each institution
+  emory <- read.csv("/Users/juliabaker/Box Sync/Combined HCP serosurvey/Data/Emory_serosurvey_09_29_2020.csv")
+  maryland_funky <- read.csv("/Users/juliabaker/Box Sync/Combined HCP serosurvey/Data/Maryland_serosurvey_September2020.csv")
+    # drop blank columns
+      maryland <- maryland_funky[c(1:17)]
+    # add missing variables
+      maryland$loc_covid <- 99
+      maryland$loc_test <- 99
+      maryland$prior_test <- 99
+      maryland$symp <- 99
+    # fixing flipped race codes (email from Lyndsay Oct 9)
+      table(maryland$race, exclude=NULL)
+      maryland$race <- ifelse(maryland$race == 1, 2, 
+                       ifelse(maryland$race == 2, 1, maryland$race))
+    # delete funky file
+      rm("maryland_funky")
+  rush <- read.csv("/Users/juliabaker/Box Sync/Combined HCP serosurvey/Data/RUSH_serosurvey_09_16_2020.csv")
+    # change variable names to lowercase
+      var.names <- tolower(colnames(rush))
+      colnames(rush) <- var.names
+  hopkins <- read.csv("/Users/juliabaker/Box Sync/Combined HCP serosurvey/Data/jhu_serostudy_09_29_2020_unlabeled.csv")
+    # add missing variable (loc_test)
+      hopkins$loc_test <- 99
+```
+
+### Data prep
+
+Notes:
+
+* Emory
+  * Data received Jul. 28, 2020
+  * 10,275 observations
+  
+* Maryland
+  * Data received Sep. 15, 2020
+  * 10,556 observations
+
+* Rush
+  * Data received Sep. 18, 2020 
+  * 2,470 observations
+  
+* Hopkins
+  * Data received Oct. 02, 2020
+  * 1,651 observations
+ 
+```{r, echo=FALSE, results="hide", message=FALSE, warning=FALSE}
+
+# combine datasets
+  all_raw <- rbind(emory, maryland, rush, hopkins)
+
+# save r datafile
+  save(all_raw, file = "all_raw.RData")
+```
+<br/>  
+
+
+```{r, echo=FALSE, results="hide", message=FALSE, warning=FALSE}
+
+# load merged datafile
+  load("all_raw.RData")
+  all <-  all_raw
+  
+
+### formatting ###
+
+# first label all original variable names with "orig"
+  names(all) = paste("orig", names(all), sep = ".")
+
+# create new variables with formats and reference categories 
+
+# 1) sex
+  all$sex <- ifelse(all$orig.sex == 1, "Male",
+             ifelse(all$orig.sex == 2, "Female", 
+             ifelse(all$orig.sex == 3, "Other/Unknown",
+             ifelse(all$orig.sex == 99, "Other/Unknown", NA))))
+  all$sex <- relevel(as.factor(all$sex), ref = "Male")
+  
+# 2) age group
+  all$age <- ifelse(all$orig.age == 1, "<30",
+             ifelse(all$orig.age == 2, "30-39",
+             ifelse(all$orig.age == 3, "40-49",
+             ifelse(all$orig.age == 4, "50-59",
+             ifelse(all$orig.age == 5, "60+",
+             ifelse(all$orig.age == 99, "Unknown", NA))))))
+  all$age <- relevel(as.factor(all$age), ref = "60+")
+  
+# 3) ethnicity
+  all$eth <- ifelse(all$orig.eth == 1, "Hispanic/Latino",
+             ifelse(all$orig.eth == 2, "Not Hispanic/Latino",
+             ifelse(all$orig.eth == 99, "Unknown", NA)))
+  all$eth <- relevel(as.factor(all$eth), ref = "Not Hispanic/Latino")
+    # table(all$eth, all$univ, exclude=NULL)
+    # bunch of "unknowns" from Maryland
+  
+# 4) race
+  all$race <- ifelse(all$orig.race == 1, "American Indian/AK Native",
+              ifelse(all$orig.race == 2, "Asian",
+              ifelse(all$orig.race == 3, "Black/African American",
+              ifelse(all$orig.race == 4, "Native HI/Other Pacific Islander",
+              ifelse(all$orig.race == 5, "White",
+              ifelse(all$orig.race == 6, "Multiracial",
+              ifelse(all$orig.race == 7, "Other",
+              ifelse(all$orig.race == 99, "Unknown", NA))))))))
+  all$race[is.na(all$race)] = "Unknown"
+  all$race <- relevel(as.factor(all$race), ref = "White")
+  
+# 5) zip
+  all$zip <- all$orig.zip
+  
+# 6) test result
+  all$result <- ifelse(all$orig.result == 0, "Negative",
+                ifelse(all$orig.result == 1, "Positive",
+                ifelse(all$orig.result == 2, "Indeterminant",
+                ifelse(all$orig.result == 99, "Unknown", NA))))
+  
+# 7) week of specimen collection
+  all$week <- all$orig.week
+  
+# 8) academic affiliation
+  all$univ <- ifelse(all$orig.univ == "EU", "Emory",
+              ifelse(all$orig.univ == "JHU", "Johns Hopkins",
+              ifelse(all$orig.univ == "RUSH", "Rush",
+              ifelse(all$orig.univ == "UIC", "Univ of Illinois, Chicago",
+              ifelse(all$orig.univ == "UMD", "Univ of Maryland", NA)))))
+  all$univ <- relevel(as.factor(all$univ), ref = "Emory")
+  
+# 9) facility type
+  all$fac_type <- ifelse(all$orig.fac_type == 1, "General acute care hospital",
+                  ifelse(all$orig.fac_type == 2, "Long term acute care",
+                  ifelse(all$orig.fac_type == 3, "Other inpatient facility (rehab)",
+                  ifelse(all$orig.fac_type == 4, "Long term care/skilled nursing facility",
+                  ifelse(all$orig.fac_type == 5, "Children's hospital",
+                  ifelse(all$orig.fac_type == 6, "Ambulatory, surgical/proced, specialty",
+                  ifelse(all$orig.fac_type == 7, "Dialysis (free standing)",
+                  ifelse(all$orig.fac_type == 8, "Ambulatory medicine, family, ob/gyn",
+                  ifelse(all$orig.fac_type == 9, "Pediatric clinic",
+                  ifelse(all$orig.fac_type == 10, "Administrative building",
+                  ifelse(all$orig.fac_type == 11, "Research building",
+                  ifelse(all$orig.fac_type == 12, "Multiple",
+                  ifelse(all$orig.fac_type == 99, "Unknown", NA)))))))))))))
+  all$fac_type <- relevel(as.factor(all$fac_type), ref = "Administrative building")
+  
+# 10) facility size
+  all$fac_size <- ifelse(all$orig.fac_size == 1, "<100 beds",
+                  ifelse(all$orig.fac_size == 2, "100-199 beds",
+                  ifelse(all$orig.fac_size == 3, "200-499 beds",
+                  ifelse(all$orig.fac_size == 4, "500+ beds",
+                  ifelse((all$orig.fac_size == 99 & 
+                          all$fac_type == "Ambulatory medicine, family, ob/gyn" | 
+                          all$fac_type == "Pediatric clinic" |
+                          all$fac_type == "Administrative building" |
+                          all$fac_type == "Research building"), "0 beds (not applicable)",
+                  ifelse(all$orig.fac_size == 99, "Unknown", NA))))))
+  all$fac_size <- relevel(as.factor(all$fac_size), ref = "0 beds (not applicable)")
+  
+  #table(all$fac_size, exclude=NULL)
+  
+# 11) facility name
+  all$fac_name <- all$orig.fac_name
+  
+# 12) job role
+  all$job_role <- ifelse(is.na(all$orig.job_role), "PCT, NA, nurse tech",
+                  ifelse(all$orig.job_role == "RN", "Nurse",
+                  ifelse(all$orig.job_role == "MD", "Physician",
+                  ifelse(all$orig.job_role == "APP", "APP",
+                  ifelse(all$orig.job_role == "RT", "Resp. therapist",
+                  ifelse(all$orig.job_role == "EVS", "Environm. services",
+                  ifelse(all$orig.job_role == "RAD", "Radiol. tech, x-ray, radiology",
+                  ifelse(all$orig.job_role == "OD", "Other direct care provider",
+                  ifelse(all$orig.job_role == "OP", "Other provider",
+                  ifelse(all$orig.job_role == "PH", "Pharmacy",
+                  ifelse(all$orig.job_role == "PT", "PT, OT, Speech",
+                  ifelse(all$orig.job_role == "NC", "Non-clinical", "Unknown"))))))))))))
+  all$job_role <- relevel(as.factor(all$job_role), ref = "Non-clinical")
+  all$job_role[is.na(all$job_role)] = "Unknown"
+  
+# 13) worked in a covid location
+  all$loc_covid <- ifelse(all$orig.loc_covid == 0, "No",
+                   ifelse(all$orig.loc_covid == 1, "Yes",
+                   ifelse(all$orig.loc_covid == 99, "Unknown", NA)))
+  all$loc_covid <- relevel(as.factor(all$loc_covid), ref = "No")
+  
+# 14) worked in ED
+  all$loc_ed <- ifelse(all$orig.loc_ed == 0, "No",
+                ifelse(all$orig.loc_ed == 1, "Yes",
+                ifelse(all$orig.loc_ed == 99, "Unknown", NA)))
+  all$loc_ed <- relevel(as.factor(all$loc_ed), ref = "No")
+  
+# 15) worked in covid testing area
+  all$loc_test <- ifelse(all$orig.loc_test == 0, "No",
+                  ifelse(all$orig.loc_test == 1, "Yes",
+                  ifelse(all$orig.loc_test == 99, "Unknown", NA)))
+  all$loc_test <- relevel(as.factor(all$loc_test), ref = "No")
+  
+# 16) primary work environment
+  all$envir <- ifelse(all$orig.envir == 1, "ED/emergency",
+               ifelse(all$orig.envir == 2, "COVID-19 focused unit",
+               ifelse(all$orig.envir == 3, "Inpatient (not COVID-19 focused)",
+               ifelse(all$orig.envir == 4, "Ambulatory locations",
+               ifelse(all$orig.envir == 5, "Perioperative/surgical",
+               ifelse(all$orig.envir == 6, "Rehab/post-acute care",
+               ifelse(all$orig.envir == 7, "No patient contact",
+               ifelse(all$orig.envir == 8, "Work from home", 
+               ifelse(all$orig.envir == 9, "Unknown",
+               ifelse(all$orig.envir == 10, "JHU- Rehab/post-acute/wfh", "Unknown"))))))))))
+  all$envir <- relevel(as.factor(all$envir), ref = "No patient contact")
+  
+# 16b) primary work environment modified to match JHU
+  all$envir_mod <- ifelse(all$orig.envir == 1, "ED/emergency",
+                   ifelse(all$orig.envir == 2, "COVID-19 focused unit",
+                   ifelse(all$orig.envir == 3, "Inpatient (not COVID-19 focused)",
+                   ifelse(all$orig.envir == 4, "Other",
+                   ifelse(all$orig.envir == 5, "Other",
+                   ifelse(all$orig.envir == 6, "Other",
+                   ifelse(all$orig.envir == 7, "Other",
+                   ifelse(all$orig.envir == 8, "Other", 
+                   ifelse(all$orig.envir == 9, "Unknown",
+                   ifelse(all$orig.envir == 10, "Other", "Unknown"))))))))))
+  all$envir_mod <- relevel(as.factor(all$envir_mod), ref = "Inpatient (not COVID-19 focused)")
+  
+# 16c) primary work environment modified further
+  all$envir_mod2 <- ifelse(all$orig.envir == 1, "ED/emergency",
+                    ifelse(all$orig.envir == 2, "Inpatient (COVID-19/non-COVID-19)",
+                    ifelse(all$orig.envir == 3, "Inpatient (COVID-19/non-COVID-19)",
+                    ifelse(all$orig.envir == 4, "Other",
+                    ifelse(all$orig.envir == 5, "Other",
+                    ifelse(all$orig.envir == 6, "Other",
+                    ifelse(all$orig.envir == 7, "Other",
+                    ifelse(all$orig.envir == 8, "Other", 
+                    ifelse(all$orig.envir == 9, "Unknown",
+                    ifelse(all$orig.envir == 10, "Other", "Unknown"))))))))))
+  all$envir_mod2 <- relevel(as.factor(all$envir_mod2), ref = "Inpatient (COVID-19/non-COVID-19)")
+  
+# 17) covid work contact
+  all$occ_cont <- ifelse(all$orig.occ_cont == 0, "No contact",
+                  ifelse(all$orig.occ_cont == 1, "Some contact",
+                  ifelse(all$orig.occ_cont == 2, "Substantial contact",
+                  ifelse(all$orig.occ_cont == 3, "Unknown",
+                  ifelse(all$orig.occ_cont == 4, "Unknown", NA)))))
+  all$occ_cont_mod <- ifelse(all$orig.occ_cont == 0, "No contact",
+                      ifelse(all$orig.occ_cont == 1, "Any contact",
+                      ifelse(all$orig.occ_cont == 2, "Any contact",
+                      ifelse(all$orig.occ_cont == 3, "Unknown",
+                      ifelse(all$orig.occ_cont == 4, "Any contact", NA)))))
+  all$occ_cont_mod <- relevel(as.factor(all$occ_cont_mod), ref = "No contact")
+  
+# 18) aerosol generating procedures
+  all$agp <- ifelse(all$orig.agp == 0, "No",
+             ifelse(all$orig.agp == 1, "Yes",
+             ifelse(all$orig.agp == 99, "Unknown", NA)))
+  all$agp <- relevel(as.factor(all$agp), ref = "No")
+  
+# 19) covid community contact
+  all$com_cont <- ifelse(all$orig.com_cont == 0, "No",
+                  ifelse(all$orig.com_cont == 1, "Yes",
+                  ifelse(all$orig.com_cont == 99, "Unknown", NA)))
+  all$com_cont <- relevel(as.factor(all$com_cont), ref = "No")
+  
+# 20) prior positive test
+  all$prior_test <- ifelse(all$orig.prior_test == 0, "No",
+                    ifelse(all$orig.prior_test == 1, "Yes",
+                    ifelse(all$orig.prior_test == 99, "Unknown", NA)))
+  all$prior_test <- relevel(as.factor(all$prior_test), ref = "No")
+  
+# 21) covid symptoms or ILI
+  all$symp <- ifelse(all$orig.symp == 0, "No",
+              ifelse(all$orig.symp == 1, "Yes",
+              ifelse(all$orig.symp == 99, "Unknown", NA)))
+  all$symp <- relevel(as.factor(all$symp), ref = "No")  
+
+```
+
+  
+``` {r, echo=FALSE, results="hide", message=FALSE, warning=FALSE}
+
+# merge with cumulative incidence data
+
+  # load incidence data
+    load("/Users/juliabaker/Box Sync/Combined HCP serosurvey/Data/Covid incidence- DO NOT SHARE/inc_data.RData")
+  # rename three-digit zip code "zip" for merging  
+    inc_data$zip <- as.numeric(inc_data$zip_three)
+  # rename week to match 2 weeks prior to serology test
+    inc_data$one_week_prior <- inc_data$week
+    inc_data$week <- NULL
+  # variable for week number 1 week prior to serology test
+    all$one_week_prior <- all$week - 1
+  # merge with main dataset
+    all <- merge(all, inc_data, by=c("zip","one_week_prior"), all.x = TRUE)
+    
+# save clean datafile
+  save(all, file = "all.RData")
+  
+  
+``` 
+
+### Univariable analysis
+
+Note: The univariable results EXCLUDE indeterminant test results
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results="hide"}
+
+# load clean datafile
+  load("all.RData")
+
+
+# examine "indeterminant" covid results
+  # check "indeterminant" results- all data together
+    covid_results <- data.frame(all %>% group_by(result) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+      # format
+        # round percents to 1 decimal
+          covid_results$prop <- format(round(covid_results$prop, digits=2), nsmall=2, trim = TRUE)
+        # n(%) 
+          covid_results$prop_percent_part1 <- paste(covid_results$n, covid_results$prop, sep=" (")
+          covid_results$prop_percent_part2 <- ")"
+          covid_results$prop_percent <- paste(covid_results$prop_percent_part1, covid_results$prop_percent_part2, sep="")
+            covid_results$prop_percent_part1 <- NULL
+            covid_results$prop_percent_part2 <- NULL
+            covid_results$n <- NULL
+            covid_results$prop <- NULL
+          names(covid_results)[names(covid_results) == "prop_percent"] <- "n (%)"
+        
+          
+  # check "indeterminant" results for each university         
+    covid_results_univ <- data.frame(all %>% group_by(univ, result) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # format
+        # round percents to 1 decimal
+          covid_results_univ$prop <- format(round(covid_results_univ$prop, digits=2), nsmall=2, trim = TRUE)
+        # n(%) 
+          covid_results_univ$prop_percent_part1 <- paste(covid_results_univ$n, covid_results_univ$prop, sep=" (")
+          covid_results_univ$prop_percent_part2 <- ")"
+          covid_results_univ$prop_percent <- paste(covid_results_univ$prop_percent_part1, covid_results_univ$prop_percent_part2, sep="")
+            covid_results_univ$prop_percent_part1 <- NULL
+            covid_results_univ$prop_percent_part2 <- NULL
+            covid_results_univ$n <- NULL
+            covid_results_univ$prop <- NULL
+          names(covid_results_univ)[names(covid_results_univ) == "prop_percent"] <- "n (%)"
+    
+```
+ 
+          
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results="hide"}
+
+# main datafile and subsets
+                  
+# new datafile with "indeterminant" results excluded
+  # create list with the new variable names plus original result (numeric)
+    var.names2 <- c("sex","age","eth","race","zip","result","week","univ","fac_type","fac_size","fac_name","job_role",
+                    "loc_covid","loc_ed","loc_test","envir","envir_mod","envir_mod2","occ_cont","occ_cont_mod", "agp","com_cont",
+                    "prior_test","symp","orig.result", 
+                    "state", "cum_inc", "log_cum_inc")
+  # dataset with just those variables and ONLY positive/negative
+    all_pos.neg <- subset(all, result == "Positive" | result == "Negative", select=c(var.names2))
+  # positives only  
+    all_pos <- subset(all_pos.neg, result == "Positive")
+
+# save clean datafile
+  save(all_pos.neg, file = "all_pos.neg.RData")
+  
+# additional subsets
+  all_except_emory <- subset(all_pos.neg, univ != "Emory") 
+  only_inpatient <- subset(all_pos.neg, envir_mod2 == "Inpatient (COVID-19/non-COVID-19)")
+```  
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results="hide"}
+
+# variables to run through
+  varlist <- c("sex","age","eth","race","result","univ","race","fac_type","fac_size","job_role",
+               "loc_covid","loc_ed","loc_test","envir","envir_mod","envir_mod2","occ_cont","occ_cont_mod", 
+               "agp","com_cont","prior_test","symp")
+
+# loop (and list to store results)
+  univar <- list()
+  for(i in varlist){
+    # total n and proportion of total n for each variable level
+      univar_freq      <- data.frame(all_pos.neg %>% group_by_at(i) %>% summarise(n=n()) %>% mutate(prop=n/sum(n), variable=i))
+    # n positive for each variable level
+      univar_freq_pos    <- data.frame(all_pos.neg %>% filter(result == "Positive") %>% group_by_at(i) %>% summarise(n_pos=n(), variable=i))
+    # combining total n, proportion of total n, n positive
+      merged    <- merge(univar_freq, univar_freq_pos, all.x=TRUE, all.y=TRUE)
+    # creating "category" variable to describe variable levels (pulling from first column)
+      category    <- merged[[1]]
+    # merging "category" variable with others
+      merged$category    <- category
+    # dropping first column (duplicated in "category" variable)
+      merged[[1]]    <- NULL
+    # save datafile into list
+      univar[[i]]    <- merged
+      }
+
+# convert list to dataframe
+  uni_results <- do.call(rbind.data.frame, univar)
+  
+# get same data for week of serology test
+  univar_freq_week <- data.frame(all_pos.neg %>% group_by(week) %>% summarise(n=n()) %>% mutate(prop=n/sum(n), variable="week"))
+  univar_freq_pos_week <- data.frame(all_pos.neg %>% filter(result == "Positive") %>% group_by(week) %>% summarise(n_pos=n()))
+  # merge
+    uni_results_week    <- merge(univar_freq_week, univar_freq_pos_week)
+  # format
+    names(uni_results_week)[names(uni_results_week) == "week"] <- "category"
+    uni_results_week$category <- as.character(uni_results_week$category)
+
+# combine "week" dataset with main univariate dataset
+  uni_results <- rbind(uni_results, uni_results_week)
+
+# adding subset label
+  uni_results$subset <- "all"
+  
+# merge combined (and university-specific results)
+  uni_results_combined <- rbind(uni_results)
+    
+# format combined dataframe
+  # reorder columns & drop row names
+    uni_results_combined <- uni_results_combined[, c(1,5,2,3,4,6)]
+    rownames(uni_results_combined) <- NULL
+  # percent of total n (convert decimal to percent) and calculate percent positive
+    uni_results_combined$prop <- uni_results_combined$prop*100
+    uni_results_combined$perc_pos <- uni_results_combined$n_pos/uni_results_combined$n*100
+  # round percents to 1 decimal
+    uni_results_combined$prop <- format(round(uni_results_combined$prop, digits=1), nsmall=1, trim = TRUE)
+    uni_results_combined$perc_pos <- format(round(uni_results_combined$perc_pos, digits=1), nsmall=1, trim = TRUE)
+  # n(%) for each variable category and positivity
+    uni_results_combined$prop_percent_part1 <- paste(uni_results_combined$n, uni_results_combined$prop, sep=" (")
+    uni_results_combined$prop_percent_part2 <- ")"
+    uni_results_combined$prop_percent <- paste(uni_results_combined$prop_percent_part1, uni_results_combined$prop_percent_part2, sep="")
+      uni_results_combined$prop_percent_part1 <- NULL
+      uni_results_combined$prop_percent_part2 <- NULL
+    uni_results_combined$pos_percent_part1 <- paste(uni_results_combined$n_pos, uni_results_combined$perc_pos, sep=" (")
+    uni_results_combined$pos_percent_part2 <- ")"
+    uni_results_combined$pos_percent <- paste(uni_results_combined$pos_percent_part1, uni_results_combined$pos_percent_part2, sep="")
+        uni_results_combined$pos_percent_part1 <- NULL
+        uni_results_combined$pos_percent_part2 <- NULL
+  
+# table format
+  # select formatted variables
+    uni_results_combined_table <- uni_results_combined %>% dplyr::select(variable, category, prop_percent, pos_percent, subset)
+  # format variable names, category codes
+    names(uni_results_combined_table)[names(uni_results_combined_table) == "prop_percent"] <- "n (%)"
+    names(uni_results_combined_table)[names(uni_results_combined_table) == "pos_percent"] <- "n positive (%)"
+  # export full table
+    write.csv(uni_results_combined_table,"/Users/juliabaker/Box Sync/Combined HCP serosurvey/Analysis/univariable_results_combined.csv", row.names = FALSE)
+ 
+  # formatting from long to wide (with columns for all and each university)  
+    uni_results_combined_table_wide <- spread(uni_results_combined_table, subset, "n (%)")  
+    uni_results_combined_table_wide <- dcast(setDT(uni_results_combined_table), variable+category~subset, value.var=c('n (%)', 'n positive (%)'))
+    # format and export
+      uni_results_combined_table_wide <- uni_results_combined_table_wide[, c(1,2,3,8,4,9,5,10,6,11,7,12)]
+      write.csv(uni_results_combined_table_wide,"/Users/juliabaker/Box Sync/Combined HCP serosurvey/Analysis/uni_results_combined_table_wide.csv", 
+                row.names = FALSE)
+    
+  # split tables by categories of variables    
+    uni_results_week      <- uni_results_combined_table_simp %>% filter(variable == "week")
+    uni_results_demog     <- uni_results_combined_table_simp %>% filter(variable == "sex" | variable == "age" | variable == "eth" |variable == "race")
+    uni_results_fac       <- uni_results_combined_table_simp %>% filter(variable == "univ" | variable == "fac_type" | variable == "fac_size")
+    uni_results_job_role  <- uni_results_combined_table_simp %>% filter(variable == "job_role")
+    uni_results_envir     <- uni_results_combined_table_simp %>% filter(variable == "envir" | variable == "envir_mod" | variable == "envir_mod2")
+    uni_results_loc       <- uni_results_combined_table_simp %>% filter(variable == "loc_covid" | variable == "loc_ed" | variable == "loc_test")
+    uni_results_occ_exp   <- uni_results_combined_table_simp %>% filter(variable == "agp" | variable == "occ_cont" | variable == "occ_cont_mod")
+    uni_results_other     <- uni_results_combined_table_simp %>% filter(variable == "com_cont" | variable == "prior_test" | variable == "symp")
+    
+```    
+<br/>
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# formatting
+  university_ordered <- c("Rush", "Emory", "Johns Hopkins", "Univ of Maryland")
+  university_colors <- c("Rush" = "springgreen4", "Emory" = "navy", "Univ of Maryland" = "red2", "Johns Hopkins" = "steelblue2")
+  all_pos.neg$age_ordered <- factor(all_pos.neg$age, levels = c("<30", "30-39", "40-49", "50-59", "60+"))
+
+```
+
+#### Serology test results
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# test results
+  kable(covid_results, 
+        caption = "Test results (all universities combined)", 
+        format = "html") %>% kable_styling(full_width = F, position = "left")
+
+  #prop.test(1080, 24749, conf.level=0.95, correct = FALSE)
+
+# test results by university
+  kable(covid_results_univ, 
+        caption = "Test results (by university)", 
+        format = "html") %>% kable_styling(full_width = F, position = "left")
+  
+# test results by week
+  # mean & median
+    #mean(all_pos.neg$week)
+    #median(all_pos.neg$week)
+    # mean = 23.4; median = 23
+  # adding description of week numbers (start dates)
+    uni_results_week$week_desc <- c("Apr 19", "Apr 26", "May 3", "May 10", "May 17", "May 24", "May 31", 
+                   "Jun 7", "Jun 14", "Jun 21", "Jun 28", "Jul 5", "Jul 12", "Jul 19", 
+                   "Jul 26", "Aug 2", "Aug 9", "Aug 16", "Aug 23", "Aug 30")
+  # reorder columns
+    uni_results_week <- uni_results_week[, c(2,3,4)]
+  # print table  
+    kable(uni_results_week, 
+          caption = "Week of serology test", 
+          format = "html") %>% kable_styling(full_width = F, position = "left")
+  
+# bar plot for week of test by university and line with percent positive
+  # check distribution of week
+    #table(all_pos.neg$week)
+  # reorder levels of "univ"
+    all_pos.neg$univ_ordered <- factor(all_pos.neg$univ, levels = university_ordered)
+  # add proportion positive to freq dataset
+    univar_freq_week_mod <- univar_freq_week
+    univar_freq_week_mod$percent_pos <- univar_freq_week_mod$prop*100
+  # plot
+    invisible(
+    test_univ_plot <- ggplot(all_pos.neg, aes(week)) +
+      geom_bar(aes(fill = univ_ordered)) +
+      #geom_line(data=univar_freq_week_mod, mapping=aes(x=week, y=(percent_pos)*100, linetype = "Percent positive"),size=.8, color="yellow") +
+      scale_x_continuous("Week", 
+                         breaks =c(17, 19, 21, 23, 25, 27, 29, 31, 33, 35), 
+                         label = c("Apr 19", "May 3", "May 17", "May 31", "Jun 14", 
+                                   "Jun 28", "Jul 12", "Jul 26", "Aug 9", "Aug 23")) + 
+      #scale_y_continuous(sec.axis = sec_axis(~./100, name="Percent positive")) +
+      labs(title="Serology tests by week and university", y="Number of participants", fill="University", linetype=" ") +
+      scale_fill_manual(values = university_colors) +
+      theme_minimal() +
+      theme(legend.position = c(0.8, 0.8), legend.spacing = unit(-6, "lines")))
+    print(test_univ_plot)
+    pdf("/Users/juliabaker/Box Sync/Combined HCP serosurvey/Manuscripts/JAMA Network Open/Revision/Figure_1.pdf", width=7, height=5)
+        print(test_univ_plot + ggtitle(" "))
+        dev.off()     
+    
+# bar plot for seropositivity by week of test
+  # plot
+    invisible(
+    test_result_plot <- ggplot(all_pos.neg, aes(week))+
+      geom_bar(aes(fill = result)) +
+      scale_x_continuous("MMWR week", 
+                         breaks =c(17, 19, 21, 23, 25, 27, 29, 31, 33, 35), 
+                         label = c("Apr 19", "May 3", "May 17", "May 31", "Jun 14", 
+                                   "Jun 28", "Jul 12", "Jul 26", "Aug 9", "Aug 23")) + 
+       labs(title="Serology tests by week and test result", y="Number of participants", fill="Test result") +
+       scale_fill_manual(values = c("Negative" = "navy", "Positive" = "red2")) +
+       theme_minimal() +
+       theme(legend.position = c(0.8, 0.8)))
+    print(test_result_plot)
+  
+```  
+<br/>    
+<br/>
+
+#### Demographics
+ 
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+  kable(uni_results_demog, 
+        caption = "Sex, age group, ethnicity, race", 
+        format = "html") %>% kable_styling(full_width = F, position = "left")
+
+ # age by university
+    age_univ <- data.frame(all_pos.neg %>% group_by(univ, age) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # reorder levels
+      age_univ$univ_ordered <- factor(age_univ$univ, levels = university_ordered)
+      age_univ$age_ordered <- factor(age_univ$age, levels = c("60+","50-59","40-49","30-39","<30"))
+    # plot
+      invisible(
+      age_univ_plot <- ggplot(age_univ, aes(fill=age_ordered, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Age by university", y="Proportion of participants", x=" ", fill="Age group") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(age_univ_plot)    
+
+
+  # race by university
+    race_univ <- data.frame(all_pos.neg %>% group_by(univ, race) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # reorder levels
+      race_univ$univ_ordered <- factor(race_univ$univ, levels = university_ordered)
+      race_univ$race_ordered <- factor(race_univ$race, levels = c("American Indian/AK Native", "Asian", "Black/African American", "Multiracial", "Native HI/Other Pacific Islander", "White", "Other", "Unknown"))
+    # plot
+      invisible(
+      race_univ_plot <- ggplot(race_univ, aes(fill=race_ordered, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Race by university", y="Proportion of participants", x=" ", fill="Race") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(race_univ_plot)    
+
+
+```    
+<br/>
+<br/>
+
+#### University & facility
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+  uni_results_fac_table <- kable(uni_results_fac, 
+        caption = "University, facility type, facility size", 
+        format = "html") %>% kable_styling(full_width = F, position = "left")
+        add_footnote(uni_results_fac_table, 
+        c("Q9) Primary facility type - classify facility based on types of patients facility serves",
+          "Q10) Estimated size of facility (NA for ambulatory, ped clinic, admin building, research building)"))
+        
+  # where are all the missings coming from
+  # all %>% group_by(univ, fac_type) %>% summarise(n=n()) %>% mutate(prop=n/sum(n))
+
+  # facility type by university
+    fac_type_univ <- data.frame(all_pos.neg %>% group_by(univ, fac_type) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # create facility type with wrapped text
+      fac_type_univ$fac_type_wrap = str_wrap(fac_type_univ$fac_type, width = 10)
+    # reorder levels of "univ"
+      fac_type_univ$univ_ordered <- factor(fac_type_univ$univ, levels = university_ordered)
+    
+    # plot-- bar plot (dodged)
+      invisible(
+      fac_type_univ_plot <- ggplot(fac_type_univ, aes(fill=univ_ordered, y=prop, x=fac_type_wrap)) + 
+        geom_col(width=0.5, position=position_dodge(0.5), stat="identity") +
+        labs(title="Facility type by university", y="Proportion of participants", x="Facility type", fill="University") +
+        scale_fill_manual(values = university_colors) +
+        theme_minimal() +
+        theme(legend.position = c(0.8, 0.8), axis.text.x = element_text(size=8)))
+ 
+    # plot- stacked bar
+      invisible(
+      fac_type_univ_plot_stack <- ggplot(fac_type_univ, aes(fill=fac_type, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Facility type by university", y="Proportion of participants", x=" ", fill="Facility type") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(fac_type_univ_plot_stack)    
+      
+  # facility size by university
+    fac_size_univ <- data.frame(all_pos.neg %>% group_by(univ, fac_size) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # create facility type with wrapped text
+      fac_size_univ$fac_size_wrap = str_wrap(fac_size_univ$fac_size, width = 10)
+    # reorder levels of "univ"
+      fac_size_univ$univ_ordered <- factor(fac_size_univ$univ, levels = university_ordered)
+    # plot- stacked bar
+      invisible(
+      fac_size_univ_plot_stack <- ggplot(fac_size_univ, aes(fill=fac_size, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Facility size by university", y="Proportion of participants", x=" ", fill="Facility size") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(fac_size_univ_plot_stack)    
+
+  # facility name
+    fac_name_table <- all_pos.neg %>% filter(univ != "Emory") %>% group_by(univ, fac_name) %>% summarize(n=n())
+  # export full table
+    write.csv(fac_name_table,"/Users/juliabaker/Box Sync/Combined HCP serosurvey/Analysis/fac_name_table.csv", row.names = FALSE)
+    
+    
+```    
+<br/>
+<br/>
+
+#### Job role and environment
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# job role
+
+  kable(uni_results_job_role, 
+        caption = "Primary work function or activity", 
+        format = "html") %>% kable_styling(full_width = F, position = "left")
+
+  # job role by university
+    job_role_univ <- data.frame(all_pos.neg %>% group_by(univ, job_role) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # adding 0 for proportions where Emory has an n of 0
+      univ <- "Emory"
+      job_role <- c("Nurse", "Other provider", "Pharmacy", "PT, OT, Speech")
+      n <- 0
+      prop <- 0
+      emory_job_roles_zero <- data.frame(univ, job_role, n, prop)
+      job_role_univ <- rbind(job_role_univ, emory_job_roles_zero)
+    # create job roles with wrapped text
+      job_role_univ$job_role_wrap = str_wrap(job_role_univ$job_role, width = 10)
+    # reorder levels of "univ"
+      job_role_univ$univ_ordered <- factor(job_role_univ$univ, levels = university_ordered)
+    # plot
+      invisible(
+      job_role_univ_plot <- ggplot(job_role_univ, aes(fill=univ_ordered, y=prop, x=job_role_wrap)) + 
+        geom_col(width=0.5, position=position_dodge(0.5), stat="identity") +
+        labs(title="Job role by university", y="Proportion of participants", x="Job role", fill="University") +
+        scale_fill_manual(values = university_colors) +
+        theme_minimal() +
+        theme(legend.position = c(0.8, 0.8), axis.text.x = element_text(size=8)))
+      print(job_role_univ_plot)
+      
+    # plot- stacked bar
+      invisible(
+      job_role_univ_plot_stack <- ggplot(job_role_univ, aes(fill=job_role, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Job role by university", y="Proportion of participants", x=" ", fill="Job role") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(job_role_univ_plot_stack)  
+      
+      
+  # age by job role crosstab
+    job_role_age <- all_pos.neg %>% 
+                    tabyl(job_role, age_ordered) %>% 
+                    adorn_totals( where = c("row", "col") ) %>%
+                    adorn_percentages("row") %>%
+                    adorn_pct_formatting() %>%
+                    adorn_ns( position = "front" ) %>%
+                    adorn_title("combined")
+    job_role_age %>%
+      kable() %>%
+      kable_styling(bootstrap_options = c("condensed", "striped", "bordered")) 
+    
+      
+```
+<br/>
+<br/>
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# environment
+
+  uni_results_envir_table <- kable(uni_results_envir, 
+        caption = "Primary work environment at primary work location", 
+        format = "html") %>% kable_styling(full_width = F, position = "left")
+        add_footnote(uni_results_envir_table, 
+        c("Q16) Primary work environment at primary work location 
+          (if multiple locations checked or combining multiple variables, assign value based on hierarchy)"))
+
+    # finding how many are missing (looks like from Maryland)
+      #table(all_pos.neg$univ, all_pos.neg$envir_mod2, exclude=NULL)
+      #82 missing from Maryland
+        #missing_envir_mod2 <- all_pos.neg %>% filter(is.na(envir_mod2))
+        #summary(missing_envir_mod2$cum_inc)
+        #6 of those 82 are also missing zip --> 76 missing total
+    
+        
+   # work environment by university
+    envir_univ <- data.frame(all_pos.neg %>% group_by(univ, envir) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    envir_mod_univ <- data.frame(all_pos.neg %>% group_by(univ, envir_mod) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    envir_mod2_univ <- data.frame(all_pos.neg %>% group_by(univ, envir_mod2) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # reorder levels 
+      envir_univ$univ_ordered <- factor(envir_univ$univ, levels = university_ordered)
+      envir_mod_univ$univ_ordered <- factor(envir_mod_univ$univ, levels = university_ordered)
+      envir_mod2_univ$univ_ordered <- factor(envir_mod2_univ$univ, levels = university_ordered)
+      envir_univ$envir_ordered <- factor(envir_univ$envir, levels = c("ED/emergency", "COVID-19 focused unit", 
+                                                                      "Inpatient (not COVID-19 focused)", "Ambulatory locations", 
+                                                                      "Perioperative/surgical", "Rehab/post-acute care", "No patient contact", 
+                                                                      "Work from home", "Unknown", "JHU- Rehab/post-acute/wfh"))
+      envir_mod_univ$envir_mod_ordered <- factor(envir_mod_univ$envir_mod, levels = c("ED/emergency", "COVID-19 focused unit", 
+                                                                      "Inpatient (not COVID-19 focused)", "Other", "Unknown"))
+      envir_mod2_univ$envir_mod2_ordered <- factor(envir_mod2_univ$envir_mod2, levels = c("ED/emergency",
+                                                                      "Inpatient (COVID-19/non-COVID-19)", "Other", "Unknown"))
+  
+    # create work environment with wrapped text/manually create labels
+      envir_univ$envir_wrap = str_wrap(envir_univ$envir_ordered, width = 10)
+      envir_manual = str_wrap(c("ED", "COVID-19 focused unit", "Inpatient (not COVID-19 focused)", "Ambulatory", 
+                                                                      "Perioperative/ surgical", "Rehab/post-acute care", "No patient contact", 
+                                                                      "Work from home", "Unknown", "JHU- Rehab/ post-acute/wfh"), width = 10)
+    # plot
+      invisible(
+      envir_univ_plot <- ggplot(envir_univ, aes(fill=univ_ordered, y=prop, x=envir_ordered)) + 
+        geom_col(width=0.5, position=position_dodge(0.5), stat="identity") +
+        labs(title="Work environment by university", y="Proportion of participants", x="Work environment", fill="University") +
+        scale_fill_manual(values = university_colors) +
+        theme_minimal() +
+        scale_x_discrete(labels = envir_manual) +
+        theme(legend.position = c(0.73, 0.8), axis.text.x = element_text(size=8)))
+      print(envir_univ_plot)     
+      
+    # plot- stacked bar
+      invisible(
+      envir_univ_plot_stack <- ggplot(envir_univ, aes(fill=envir_ordered, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Work environment by university", y="Proportion of participants", x=" ", fill="Work environment") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(envir_univ_plot_stack)  
+      
+    # plot- stacked bar
+      invisible(
+      envir_mod_univ_plot_stack <- ggplot(envir_mod_univ, aes(fill=envir_mod_ordered, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Work environment (modified) by university", y="Proportion of participants", x=" ", fill="Work environment") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(envir_mod_univ_plot_stack)  
+      
+    # plot- stacked bar
+      invisible(
+      envir_mod2_univ_plot_stack <- ggplot(envir_mod2_univ, aes(fill=envir_mod2_ordered, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Work environment (modified v2) by university", y="Proportion of participants", x=" ", fill="Work environment") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(envir_mod2_univ_plot_stack)  
+        
+```
+<br/>
+<br/>
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# work location
+        
+  uni_results_loc_table <- kable(uni_results_loc, 
+        caption = "Worked in a COVID-19 care location, ED, COVID-19 testing clinic designated area", 
+        format = "html") %>% kable_styling(full_width = F, position = "left")
+        add_footnote(uni_results_loc_table, 
+        c("Q13) Worked in COVID care location (in past month at primary work site)",
+          "Q14) Worked in ED (either with or without a COVID-19 designation)",
+          "Q15) Worked in COVID-19 testing clinic designated area"))
+  
+  # worked in COVID-19 location by university
+    loc_covid_univ <- data.frame(all_pos.neg %>% group_by(univ, loc_covid) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # reorder levels of "univ"
+      loc_covid_univ$univ_ordered <- factor(loc_covid_univ$univ, levels = university_ordered)
+    # plot- stacked bar
+      invisible(
+      loc_covid_univ_plot_stack <- ggplot(loc_covid_univ, aes(fill=loc_covid, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Worked in COVID-19 location by university", y="Proportion of participants", x=" ", fill="Worked in COVID-19 location") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(loc_covid_univ_plot_stack)    
+  
+  # worked in ED by university
+    loc_ed_univ <- data.frame(all_pos.neg %>% group_by(univ, loc_ed) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # reorder levels of "univ"
+      loc_ed_univ$univ_ordered <- factor(loc_ed_univ$univ, levels = university_ordered)
+    # plot- stacked bar
+      invisible(
+      loc_ed_univ_plot_stack <- ggplot(loc_ed_univ, aes(fill=loc_ed, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Worked in ED by university", y="Proportion of participants", x=" ", fill="Worked in Emergency Dept") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(loc_ed_univ_plot_stack)     
+        
+  # worked in COVID-19 testing area by university
+    loc_test_univ <- data.frame(all_pos.neg %>% group_by(univ, loc_test) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # reorder levels of "univ"
+      loc_test_univ$univ_ordered <- factor(loc_test_univ$univ, levels = university_ordered)
+    # plot- stacked bar
+      invisible(
+      loc_test_univ_plot_stack <- ggplot(loc_test_univ, aes(fill=loc_test, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Worked in COVID-19 testing area by university", y="Proportion of participants", x=" ", fill="Worked in COVID-19 testing area") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(loc_test_univ_plot_stack)   
+        
+        
+# occupational exposures
+        
+  uni_results_occ_exp_table <- kable(uni_results_occ_exp, 
+        caption = "COVID-19 work contact or aerosol generating procedures", 
+        format = "html") %>% kable_styling(full_width = F, position = "left")
+        add_footnote(uni_results_occ_exp_table, 
+        c("Q17) Amount of direct patient contact at work with known COVID-19 patients; or amount of time on COVID units/locations",
+          "Q18) Participate in any aerosol generating procedures (w/ or w/o known/suspected COVID-19 patients since start of pandemic (Mar 2020)"))
+        
+        
+  # COVID-19 work contact by university
+    occ_cont_univ <- data.frame(all_pos.neg %>% group_by(univ, occ_cont) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # reorder levels of "univ"
+      occ_cont_univ$univ_ordered <- factor(occ_cont_univ$univ, levels = university_ordered)
+    # plot- stacked bar
+      invisible(
+      occ_cont_univ_plot_stack <- ggplot(occ_cont_univ, aes(fill=occ_cont, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Contact with known COVID-19 patients", y="Proportion of participants", x=" ", fill="Contact") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(occ_cont_univ_plot_stack)    
+  
+  # COVID-19 work contact (modified) by university
+    occ_cont_mod_univ <- data.frame(all_pos.neg %>% group_by(univ, occ_cont_mod) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # reorder levels of "univ"
+      occ_cont_mod_univ$univ_ordered <- factor(occ_cont_mod_univ$univ, levels = university_ordered)
+    # plot- stacked bar
+      invisible(
+      occ_cont_mod_univ_plot_stack <- ggplot(occ_cont_mod_univ, aes(fill=occ_cont_mod, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Contact with known COVID-19 patients (modified)", y="Proportion of participants", x=" ", fill="Contact") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(occ_cont_mod_univ_plot_stack)    
+      
+  # AGP by university
+    agp_univ <- data.frame(all_pos.neg %>% group_by(univ, agp) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # reorder levels of "univ"
+      agp_univ$univ_ordered <- factor(agp_univ$univ, levels = university_ordered)
+    # plot- stacked bar
+      invisible(
+      agp_univ_plot_stack <- ggplot(agp_univ, aes(fill=agp, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Participation in AGP", y="Proportion of participants", x=" ", fill="Participation in AGP") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(agp_univ_plot_stack)         
+        
+        
+```    
+<br/>
+<br/>
+
+#### Other
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+  uni_results_other_table <- kable(uni_results_other, 
+        caption = "Community contact, prior COVID-19 test, symptoms/illness", 
+        format = "html") %>% kable_styling(full_width = F, position = "left")
+        add_footnote(uni_results_other_table, 
+        c("Q19) Do you recall any contact outside of work (any location) with person who had/tested positive for COVID-19", 
+          "Q20) Have you had any positive test for COVID-19 prior to this test",
+          "Q21) Do you currently have or have you had in past month(s) flu like illness or COVID-19 symptoms"))  
+      
+        
+   # Community contact by university
+    com_cont_univ <- data.frame(all_pos.neg %>% group_by(univ, com_cont) %>% summarise(n=n()) %>% mutate(prop=n/sum(n)))
+    # reorder levels of "univ"
+      com_cont_univ$univ_ordered <- factor(com_cont_univ$univ, levels = university_ordered)
+    # plot- stacked bar
+      invisible(
+      com_cont_univ_plot_stack <- ggplot(com_cont_univ, aes(fill=com_cont, y=n, x=univ_ordered)) + 
+        geom_bar(position = "fill", stat="identity") +
+        labs(title="Contact w/ COVID-19 positive person outside of work", y="Proportion of participants", x=" ", fill="Community contact") +
+        scale_fill_brewer(palette = "Paired") +
+        theme_minimal())
+      print(com_cont_univ_plot_stack)          
+        
+        
+```
+<br/>
+<br/>
+
+#### Cumulative incidence (by 3-digit zip)
+* GA zip codes: 300-319 and 398
+* MD zip codes: 206-212, 214-219
+* IL zip codes: 600-620, 622-629
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# mean and range for cumulative incidence
+  #mean(all_pos.neg$log_cum_inc, na.rm=TRUE)
+  #summary(all_pos.neg$log_cum_inc)
+  #mean(all_pos$log_cum_inc, na.rm=TRUE)
+  #summary(all_pos$log_cum_inc)
+  #ggplot(all_pos.neg, aes(x=log_cum_inc)) +
+    #geom_histogram()
+
+  #summary(all_pos.neg$cum_inc)
+  #summary(only_emory$cum_inc)
+  #summary(only_maryland$cum_inc)
+  #summary(only_hopkins$cum_inc)
+  #summary(only_rush$cum_inc)
+
+
+
+# list of zip codes in dataset without incidence data
+  missing_zip <- all_pos.neg %>%
+                    filter(is.na(state)) %>%
+                    group_by(univ, zip) %>%
+                    summarise(count = n())
+# missing zip codes
+  missing_zip_by_univ <- all_pos.neg %>%
+                            filter(is.na(state)) %>%
+                            group_by(univ) %>%
+                            summarise(count = n())
+  uni_results_cum_inc_missing_table <- kable(missing_zip_by_univ, 
+        caption = "Number of observations missing cumulative incidence", 
+        format = "html") %>% kable_styling(full_width = F, position = "left")
+        add_footnote(uni_results_cum_inc_missing_table, 
+        c("Missing cumulative incidence because participant zip code is out of state")) 
+  
+# cumulative incidence range
+  cum_inc_range <- data.frame(all_pos.neg %>%
+                      group_by(univ, result) %>%
+                      summarise(min=round(min(cum_inc, na.rm=TRUE),2), 
+                      max=round(max(cum_inc, na.rm=TRUE),2)))
+  
+  uni_results_cum_inc_table <- kable(cum_inc_range, 
+        caption = "Range in cumulative incidence of COVID-19 (per 10k)", 
+        format = "html") %>% kable_styling(full_width = F, position = "left")
+        add_footnote(uni_results_cum_inc_table, 
+        c("Cumulative incidence linked to participants by zip code and week (1 week prior to serology test)")) 
+  
+  # scatterplot of cumulative incidence by university
+    # reorder levels of "univ"
+      all_pos.neg$univ_ordered <- factor(all_pos.neg$univ, levels = university_ordered)
+      all_pos.neg$log_cum_inc_format <- unlist(all_pos.neg$log_cum_inc)
+      all_pos.neg$cum_inc_format <- unlist(all_pos.neg$cum_inc)
+    # plot- violin plot (log)
+      invisible(
+      log_cum_inc_univ_plot_scatter <- ggplot(all_pos.neg, aes(y=unlist(log_cum_inc), x=univ, fill=result)) + 
+        #geom_dotplot(binaxis="y", dotsize=.1) +
+        geom_violin(scale = "area") +
+        scale_fill_manual(values = c("Negative" = "navy", "Positive" = "red2")) +
+        labs(title="Cumulative incidence (log10 scale) by university", y="Cumulative incidence (log10)", x=" ") +
+        theme_minimal())
+      print(log_cum_inc_univ_plot_scatter)  
+    # plot- violin plot (not log)
+     invisible(
+      cum_inc_univ_plot_scatter <- ggplot(all_pos.neg, aes(y=unlist(cum_inc), x=univ, fill=result)) + 
+        #geom_dotplot(binaxis="y", dotsize=.1) +
+        geom_violin(scale = "area") +
+        scale_fill_manual(values = c("Negative" = "navy", "Positive" = "red2")) +
+        labs(title="Cumulative incidence by university", y="Cumulative incidence (per 10k popul)", x=" ") +
+        theme_minimal())
+      print(cum_inc_univ_plot_scatter)  
+      
+# cumulative incidence range by week
+  weekly_cum_inc_range <- data.frame(all_pos.neg %>%
+                          group_by(univ, week) %>%
+                          summarise(mean=mean(cum_inc, na.rm=TRUE),
+                                    min=min(cum_inc, na.rm=TRUE), 
+                                    max=max(cum_inc, na.rm=TRUE)))  
+ 
+  invisible(
+      weekly_cum_inc_univ_plot <- ggplot(weekly_cum_inc_range, aes(x=week, y=mean, color=univ)) + 
+        scale_color_manual(values = university_colors) +
+        geom_line() +
+        geom_linerange(aes(ymin=min, ymax=max),
+                        position = position_dodge(width = 1), size=.5) +
+          scale_x_continuous("Week", 
+                         breaks =c(17, 19, 21, 23, 25, 27, 29, 31, 33, 35), 
+                         label = c("Apr 19", "May 3", "May 17", "May 31", "Jun 14", 
+                                   "Jun 28", "Jul 12", "Jul 26", "Aug 9", "Aug 23")) + 
+        labs(title="Mean and range of cumulative incidence by week and healthcare system", y="Cumulative incidence of COVID-19 (per 10,000 population)", x="Week") +
+        theme_minimal() +
+        theme(legend.position = "none") +
+        facet_wrap(vars(univ), ncol=1))
+      print(weekly_cum_inc_univ_plot) 
+  
+  pdf("/Users/juliabaker/Box Sync/Combined HCP serosurvey/Analysis/weekly_cum_inc_univ_plot.pdf", width=8, height=8)
+    print(weekly_cum_inc_univ_plot) 
+    dev.off
+  pdf("/Users/juliabaker/Box Sync/Combined HCP serosurvey/JAMA/supp_figure_1.pdf", width=8, height=8)
+    print(weekly_cum_inc_univ_plot + ggtitle(" ")) 
+    dev.off
+  
+  
+```
+
+
+<br/>
+<br/>
+
+### Bivariate (unadjusted) & multivariable (adjusted) results
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+### Bivariate (unadjusted) analysis
+# list of variables for bivariate analysis 
+  bi_varlist <- c('week', 'sex', 'age', 'race', 'eth', 
+                  'univ', 'fac_type', 'fac_size',
+                  'job_role', 'envir', 'envir_mod', 'envir_mod2',
+                  'loc_covid', 'loc_ed', 'loc_test',
+                  'occ_cont', 'occ_cont_mod', 'agp', 
+                  'com_cont', 'log_cum_inc',
+                  'symp', 'prior_test')
+# function to run models (and combine into a list):
+  bi_models <- lapply(bi_varlist, function(x) {
+    glm(substitute(orig.result ~ i, list(i = as.name(x))), data = all_pos.neg, family = "binomial")
+    })
+
+# function to extract results of interest and create dataframe of result
+  extract_glm <- function(res){
+    category <- variable.names(res) 
+    or <- exp((res)$coeff)
+    lci <- exp(confint(res)[,1])
+    uci <- exp(confint(res)[,2])
+    output <- data.frame(category, or, lci, uci)
+    output
+  }
+
+# apply function to extract output to the models
+  bi_results <- lapply(bi_models, extract_glm)
+  bi_results_df <- do.call(rbind, bi_results)
+
+ # formatting
+    rownames(bi_results_df) <- NULL
+    bi_results_df <- bi_results_df[!grepl("(Intercept)", bi_results_df$category),]
+ # changing CI for sex unknown and other-- super high uci
+    #bi_results_df$uci <- ifelse(bi_results_df$category == "sexUnknown", NA, bi_results_df$uci)
+    #bi_results_df$uci <- ifelse(bi_results_df$category == "sexOther", NA, bi_results_df$uci)
+    
+  # reduce decimals
+      bi_results_df$or  <- format(round(bi_results_df$or, digits=1), nsmall=1, trim = TRUE)
+      bi_results_df$lci  <- format(round(bi_results_df$lci, digits=1), nsmall=1, trim = TRUE)
+      bi_results_df$uci  <- format(round(bi_results_df$uci, digits=1), nsmall=1, trim = TRUE)
+      
+    # combining OR and CI into one column
+      bi_results_df$OR_CI_part1 <- paste(bi_results_df$or, bi_results_df$lci, sep=" (")
+      bi_results_df$OR_CI_part2 <- paste(bi_results_df$OR_CI_part1, bi_results_df$uci, sep="-")
+      bi_results_df$OR_CI_part3 <- ")"
+      bi_results_df$unadj_OR_CI <- paste(bi_results_df$OR_CI_part2, bi_results_df$OR_CI_part3, sep="")
+      bi_results_df[ ,c('OR_CI_part1', 'OR_CI_part2', 'OR_CI_part3', 'or', 'lci', 'uci')] <- list(NULL)
+ 
+  
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# note: 1201 missing cumulative incidence (24,749-1,201 = 23,548)
+  #summary(all_pos.neg$log_cum_inc)
+
+# model 1- Oct 26 (updated Nov to change "occ_cont" to "occ_cont_mod")
+  m1 <- glm(orig.result ~ sex + age + race + eth + 
+                          log_cum_inc + com_cont + 
+                          job_role + envir_mod2 + occ_cont_mod,
+                          data = all_pos.neg, family = "binomial")
+
+  # results  
+    #summary(m1)
+    #1277 observations deleted due to missingness
+    m1_coeff <- exp(cbind(OR = coef(m1), confint(m1)))
+    m1_p_val <- summary(m1)$coefficients[,4]
+    m1_results <- data.frame(round((cbind(m1_coeff, m1_p_val)), 3))
+      
+  # formatting
+    # rename/reorder columns
+      setDT(m1_results, keep.rownames = "category")
+      names(m1_results)[names(m1_results) == "X2.5.."] <- "LCI"
+      names(m1_results)[names(m1_results) == "X97.5.."] <- "UCI"
+      names(m1_results)[names(m1_results) == "m1_p_val"] <- "p_val"
+   # combining OR and CIs into one column
+      m1_results$OR_CI_part1 <- paste(format(round(m1_results$OR, digits=1), nsmall=1), 
+                                         format(round(m1_results$LCI, digits=1), nsmall=1), sep=" (")
+      m1_results$OR_CI_part2 <- paste(m1_results$OR_CI_part1, 
+                                         format(round(m1_results$UCI, digits=1), nsmall=1), sep="-")
+      m1_results$OR_CI_part3 <- ")"
+      m1_results$adj_OR_CI <- paste(m1_results$OR_CI_part2, m1_results$OR_CI_part3, sep="")
+        m1_results[ ,c('OR_CI_part1', 'OR_CI_part2', 'OR_CI_part3', 'OR', 'LCI', 'UCI')] <- list(NULL)
+        m1_results <- m1_results[, c(1,3)]  
+          
+```
+
+ 
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# subsets
+            
+# model 1- all except Emory
+  m1_except_eu <- glm(orig.result ~ sex + age + race + eth + 
+                                    log_cum_inc + com_cont + 
+                                    job_role + envir_mod2 + occ_cont_mod,
+                                    data = all_except_emory, family = "binomial")
+
+  # results  
+    #summary(m1_except_eu)
+    #689 observations deleted due to missingness
+    m1_except_eu_coeff <- exp(cbind(OR = coef(m1_except_eu), confint(m1_except_eu)))
+    m1_except_eu_p_val <- summary(m1_except_eu)$coefficients[,4]
+    m1_except_eu_results <- data.frame(round((cbind(m1_except_eu_coeff, m1_except_eu_p_val)), 3))
+      
+  # formatting
+    # rename/reorder columns
+      setDT(m1_except_eu_results, keep.rownames = "category")
+      names(m1_except_eu_results)[names(m1_except_eu_results) == "X2.5.."] <- "LCI"
+      names(m1_except_eu_results)[names(m1_except_eu_results) == "X97.5.."] <- "UCI"
+      names(m1_except_eu_results)[names(m1_except_eu_results) == "m1_except_eu_p_val"] <- "p_val"
+    # fix very high CI
+      m1_except_eu_results$UCI <- ifelse(m1_except_eu_results$category == "sexOther/Unknown", NA, m1_except_eu_results$UCI)
+      m1_except_eu_results$UCI <- ifelse(m1_except_eu_results$category == "com_contUnknown", NA, m1_except_eu_results$UCI)
+    # combining OR and CIs into one column
+      m1_except_eu_results$OR_CI_part1 <- paste(format(round(m1_except_eu_results$OR, digits=1), nsmall=1, trim=TRUE), 
+                                         format(round(m1_except_eu_results$LCI, digits=1), nsmall=1, trim=TRUE), sep=" (")
+      m1_except_eu_results$OR_CI_part2 <- paste(m1_except_eu_results$OR_CI_part1, 
+                                         format(round(m1_except_eu_results$UCI, digits=1), nsmall=1, trim=TRUE), sep="-")
+      m1_except_eu_results$OR_CI_part3 <- ")"
+      m1_except_eu_results$aOR_no_EU <- paste(m1_except_eu_results$OR_CI_part2, m1_except_eu_results$OR_CI_part3, sep="")
+          m1_except_eu_results[ ,c('OR_CI_part1', 'OR_CI_part2', 'OR_CI_part3', 'OR', 'LCI', 'UCI')] <- list(NULL)
+          m1_except_eu_results <- m1_except_eu_results[, c(1,3)]     
+          
+          
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# random intercept
+
+  all_pos.neg_no_miss <- all_pos.neg %>% filter(sex != "Other/Unknown" &
+                                                race != "Unknown" &
+                                                eth != "Unknown" &
+                                                job_role != "Unknown" &
+                                                occ_cont != "Unknown" &
+                                                envir_mod2 != "Unknown")
+
+# model 4- Nov 02 (random intercept model)
+  m4 <- glmer(orig.result ~ sex + age + race + eth + 
+                            log_cum_inc + com_cont + 
+                            job_role + envir_mod2 + occ_cont_mod +
+                            (1 | univ), data = all_pos.neg, family = binomial, control = glmerControl(optimizer = "bobyqa"))
+
+  # checking what data were missing and dropped-- all from missing cumulative incidence data
+    #summary(all_pos.neg$log_cum_inc)
+  # results  
+    summary(m4)
+    #summary(m1)
+    #anova(m4, m1)
+    m4_se <- sqrt(diag(vcov(m4)))
+    m4_results <- data.frame(exp(cbind(OR = fixef(m4), LCI = fixef(m4) - 1.96*m4_se, UCI = fixef(m4) + 1.96*m4_se)))
+  # formatting
+    # rename/reorder columns
+      setDT(m4_results, keep.rownames = "category")
+    # fix very high CI
+      m4_results$UCI <- ifelse(m4_results$category == "sexOther/Unknown", NA, m4_results$UCI)
+   # combining OR and CIs into one column
+      m4_results$OR_CI_part1 <- paste(format(round(m4_results$OR, digits=1), nsmall=1, trim=TRUE), 
+                                         format(round(m4_results$LCI, digits=1), nsmall=1, trim=TRUE), sep=" (")
+      m4_results$OR_CI_part2 <- paste(m4_results$OR_CI_part1, 
+                                         format(round(m4_results$UCI, digits=1), nsmall=1, trim=TRUE), sep="-")
+      m4_results$OR_CI_part3 <- ")"
+      m4_results$aOR_m4 <- paste(m4_results$OR_CI_part2, m4_results$OR_CI_part3, sep="")
+          m4_results[ ,c('OR_CI_part1', 'OR_CI_part2', 'OR_CI_part3', 'OR', 'LCI', 'UCI')] <- list(NULL)
+          
+
+```          
+ 
+                    
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# random intercept          
+  # model 4 excluding Emory- random intercept but all except Emory
+    m4_except_eu <- glmer(orig.result ~ sex + age + race + eth + 
+                          log_cum_inc + com_cont + 
+                          job_role + envir_mod2 + occ_cont_mod +
+                          (1 | univ), data = all_except_emory, family = binomial, control = glmerControl(optimizer = "bobyqa"))
+  # results  
+    #summary(m4_except_eu)
+    #1277 observations deleted due to missingness
+    m4_except_eu_se <- sqrt(diag(vcov(m4_except_eu)))
+    m4_except_eu_results <- data.frame(exp(cbind(OR = fixef(m4_except_eu), LCI = fixef(m4_except_eu) - 1.96*m4_except_eu_se, UCI = fixef(m4_except_eu) + 1.96*m4_except_eu_se)))
+  # formatting
+    # rename/reorder columns
+      setDT(m4_except_eu_results, keep.rownames = "category")
+    # fix very high CI
+      m4_except_eu_results$UCI <- ifelse(m4_except_eu_results$category == "sexOther/Unknown", NA, m4_except_eu_results$UCI)
+      m4_except_eu_results$UCI <- ifelse(m4_except_eu_results$category == "com_contUnknown", NA, m4_except_eu_results$UCI)
+   # combining OR and CIs into one column
+      m4_except_eu_results$OR_CI_part1 <- paste(format(round(m4_except_eu_results$OR, digits=1), nsmall=1, trim=TRUE), 
+                                         format(round(m4_except_eu_results$LCI, digits=1), nsmall=1, trim=TRUE), sep=" (")
+      m4_except_eu_results$OR_CI_part2 <- paste(m4_except_eu_results$OR_CI_part1, 
+                                         format(round(m4_except_eu_results$UCI, digits=1), nsmall=1, trim=TRUE), sep="-")
+      m4_except_eu_results$OR_CI_part3 <- ")"
+      m4_except_eu_results$aOR_m4_except_eu <- paste(m4_except_eu_results$OR_CI_part2, m4_except_eu_results$OR_CI_part3, sep="")
+          m4_except_eu_results[ ,c('OR_CI_part1', 'OR_CI_part2', 'OR_CI_part3', 'OR', 'LCI', 'UCI')] <- list(NULL)
+          
+          
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# creating linear time variable to account for possible time trend
+  all_pos.neg$month <- ifelse((all_pos.neg$week == 17 | all_pos.neg$week == 18), 4, 
+                       ifelse((all_pos.neg$week == 19 | all_pos.neg$week == 20 | all_pos.neg$week == 21 | all_pos.neg$week == 22 | all_pos.neg$week == 23), 5,
+                       ifelse((all_pos.neg$week == 24 | all_pos.neg$week == 25 | all_pos.neg$week == 26 | all_pos.neg$week == 27), 6,
+                       ifelse((all_pos.neg$week == 28 | all_pos.neg$week == 29 | all_pos.neg$week == 30 | all_pos.neg$week == 31), 7,
+                       ifelse((all_pos.neg$week == 32 | all_pos.neg$week == 33 | all_pos.neg$week == 34 | all_pos.neg$week == 35 | all_pos.neg$week == 36), 8, NA)))))
+  
+  all_pos.neg$month_cat <- ifelse((all_pos.neg$week == 17 | all_pos.neg$week == 18), "Apr", 
+                           ifelse((all_pos.neg$week == 19 | all_pos.neg$week == 20 | all_pos.neg$week == 21 | all_pos.neg$week == 22 | all_pos.neg$week == 23), "May",
+                           ifelse((all_pos.neg$week == 24 | all_pos.neg$week == 25 | all_pos.neg$week == 26 | all_pos.neg$week == 27), "Jun",
+                           ifelse((all_pos.neg$week == 28 | all_pos.neg$week == 29 | all_pos.neg$week == 30 | all_pos.neg$week == 31), "Jul",
+                           ifelse((all_pos.neg$week == 32 | all_pos.neg$week == 33 | all_pos.neg$week == 34 | all_pos.neg$week == 35 | all_pos.neg$week == 36), "Aug", NA)))))
+  all_pos.neg$month_cat <- relevel(as.factor(all_pos.neg$month_cat), ref = "Apr") 
+  
+  
+  
+# model 4 (random intercept model) with linear variable for time (month)
+  m4_time <- glmer(orig.result ~ sex + age + race + eth + 
+                                 log_cum_inc + com_cont + 
+                                 job_role + envir_mod2 + occ_cont_mod +
+                                 month_cat +
+                                 (1 | univ), data = all_pos.neg, family = binomial, control = glmerControl(optimizer = "bobyqa"))
+  
+  # results  
+    summary(m4_time)
+    m4_time_se <- sqrt(diag(vcov(m4_time)))
+    m4_time_results <- data.frame(exp(cbind(OR = fixef(m4_time), LCI = fixef(m4_time) - 1.96*m4_time_se, UCI = fixef(m4_time) + 1.96*m4_time_se)))
+  # formatting
+    # rename/reorder columns
+      setDT(m4_time_results, keep.rownames = "category")
+    # fix very high CI
+      m4_time_results$UCI <- ifelse(m4_time_results$category == "sexOther/Unknown", NA, m4_time_results$UCI)
+   # combining OR and CIs into one column
+      m4_time_results$OR_CI_part1 <- paste(format(round(m4_time_results$OR, digits=1), nsmall=1, trim=TRUE), 
+                                         format(round(m4_time_results$LCI, digits=1), nsmall=1, trim=TRUE), sep=" (")
+      m4_time_results$OR_CI_part2 <- paste(m4_time_results$OR_CI_part1, 
+                                         format(round(m4_time_results$UCI, digits=1), nsmall=1, trim=TRUE), sep="-")
+      m4_time_results$OR_CI_part3 <- ")"
+      m4_time_results$aOR_m4_time <- paste(m4_time_results$OR_CI_part2, m4_time_results$OR_CI_part3, sep="")
+          m4_time_results[ ,c('OR_CI_part1', 'OR_CI_part2', 'OR_CI_part3', 'OR', 'LCI', 'UCI')] <- list(NULL)
+          
+
+```          
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# combining all model results
+
+# merge each university and combined
+  # format column name
+    m1_all <- m1_results
+    names(m1_all)[names(m1_all) == "adj_OR_CI"] <- "aOR_all"
+          
+  all_results <- merge(m1_results, m4_results, by="category", all=TRUE)
+  all_results <- merge(all_results, m4_time_results, by="category", all=TRUE)
+
+  
+    # create "variable" column
+    all_results$variable <-  ifelse((all_results$category %like% "week"), "week",
+                                  ifelse((all_results$category %like% "race"), "race",
+                                  ifelse((all_results$category %like% "eth"), "eth",
+                                  ifelse((all_results$category %like% "log_cum_inc"), "log_cum_inc",
+                                  ifelse((all_results$category %like% "age"), "age",
+                                  ifelse((all_results$category %like% "univ"), "univ",
+                                  ifelse((all_results$category %like% "fac_type"), "fac_type",
+                                  ifelse((all_results$category %like% "fac_size"), "fac_size",
+                                  ifelse((all_results$category %like% "job_role"), "job_role",
+                                  ifelse((all_results$category %like% "envir_mod2"), "envir_mod2",
+                                  ifelse((all_results$category %like% "envir_mod"), "envir_mod",
+                                  ifelse((all_results$category %like% "envir"), "envir",       
+                                  ifelse((all_results$category %like% "loc_covid"), "loc_covid",
+                                  ifelse((all_results$category %like% "loc_ed"), "loc_ed",
+                                  ifelse((all_results$category %like% "loc_test"), "loc_test",
+                                  ifelse((all_results$category %like% "occ_cont_mod"), "occ_cont_mod",
+                                  ifelse((all_results$category %like% "agp"), "agp",
+                                  ifelse((all_results$category %like% "com_cont"), "com_cont", 
+                                  ifelse((all_results$category %like% "sex"), "sex", 
+                                  ifelse((all_results$category %like% "symp"), "symp",
+                                  ifelse((all_results$category %like% "prior_test"), "prior_test", 
+                                  ifelse((all_results$category %like% "month"), "month", NA))))))))))))))))))))))
+
+    # format "category" column
+      all_results$category <- str_remove(all_results$category, "race") 
+      all_results$category <- str_remove(all_results$category, "sex") 
+      all_results$category <- str_remove(all_results$category, "eth") 
+      all_results$category <- str_remove(all_results$category, "age") 
+      all_results$category <- str_remove(all_results$category, "univ") 
+      all_results$category <- str_remove(all_results$category, "fac_type")
+      all_results$category <- str_remove(all_results$category, "fac_size") 
+      all_results$category <- str_remove(all_results$category, "job_role") 
+      all_results$category <- str_remove(all_results$category, "envir_mod2")
+      all_results$category <- str_remove(all_results$category, "envir_mod")
+      all_results$category <- str_remove(all_results$category, "envir")       
+      all_results$category <- str_remove(all_results$category, "loc_covid")       
+      all_results$category <- str_remove(all_results$category, "loc_ed")       
+      all_results$category <- str_remove(all_results$category, "loc_test") 
+      all_results$category <- str_remove(all_results$category, "occ_cont_mod")
+      all_results$category <- str_remove(all_results$category, "agp")
+      all_results$category <- str_remove(all_results$category, "com_cont")
+      all_results$category <- str_remove(all_results$category, "symp")
+      all_results$category <- str_remove(all_results$category, "prior_test")
+      all_results$category <- str_remove(all_results$category, "month_cat")
+      
+      
+  # format       
+    all_results$variable <- ifelse((all_results$variable %like% "week"), "Week of test",
+                                     ifelse((all_results$variable %like% "race"), "Race",
+                                     ifelse((all_results$variable %like% "eth"), "Ethnicity",
+                                     ifelse((all_results$variable %like% "log_cum_inc"), "Cumulative incidence (log10)",
+                                     ifelse((all_results$variable %like% "age"), "Age group",
+                                     ifelse((all_results$variable %like% "univ"), "University",
+                                     ifelse((all_results$variable %like% "fac_type"), "Facility type",
+                                     ifelse((all_results$variable %like% "fac_size"), "Facility size",
+                                     ifelse((all_results$variable %like% "job_role"), "Job role",
+                                     ifelse((all_results$variable %like% "envir_mod2"), "Work environment (modified v2)",
+                                     ifelse((all_results$variable %like% "envir_mod"), "Work environment (modified)",
+                                     ifelse((all_results$variable %like% "envir"), "Work environment",       
+                                     ifelse((all_results$variable %like% "loc_covid"), "Worked in COVID-19 care location",
+                                     ifelse((all_results$variable %like% "loc_ed"), "Worked in ED",
+                                     ifelse((all_results$variable %like% "loc_test"), "Worked in COVID-19 testing area",
+                                     ifelse((all_results$variable %like% "occ_cont_mod"), "COVID-19 patient contact (modified)",
+                                     ifelse((all_results$variable %like% "agp"), "Aerosol generating procedures",
+                                     ifelse((all_results$variable %like% "com_cont"), "Community contact", 
+                                     ifelse((all_results$variable %like% "sex"), "Sex", 
+                                     ifelse((all_results$variable %like% "symp"), "Symptoms",
+                                     ifelse((all_results$variable %like% "prior_test"), "Prior test",
+                                     ifelse((all_results$variable %like% "result"), "Result", 
+                                     ifelse((all_results$variable %like% "month"), "Month of test", NA)))))))))))))))))))))))    
+      
+  # ordering the variables/levels
+    variable_order <- c("Sex", "Age group", "Ethnicity", "Race", 
+                        "University", "Facility type", "Facility size",
+                        "Job role",
+                        "Work environment", "Work environment (modified)", "Work environment (modified v2)",
+                        "Worked in COVID-19 care location", "Worked in ED", "Worked in COVID-19 testing area",
+                        "Aerosol generating procedures", "COVID-19 patient contact (modified)",
+                        "Cumulative incidence (log10)", "Community contact", "Symptoms", "Prior test", "Week of test", "Month of test", "Result")
+      
+ # apply orders to dataframe     
+   all_results$variable <- ordered(all_results$variable, levels=variable_order)
+   all_results <- all_results[with(all_results, order(variable, category)),]
+ # reorder columns
+   all_results <- all_results[, c(5,1,2,3,4)]     
+   
+  # export full table
+    write.csv(all_results,"/Users/juliabaker/Box Sync/Combined HCP serosurvey/Analysis/all_results.csv", row.names = FALSE)
+    
+        
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+  
+
+# merging bivariate and multivariable analyses
+  bi_multi_results <- merge(bi_results_df, m4_results, all.x=TRUE, all.y=TRUE)
+  # format column names
+    names(bi_multi_results)[names(bi_multi_results) == "aOR_m4"] <- "adj_OR_CI"
+          
+
+  # create "variable" column
+    bi_multi_results$variable <-  ifelse((bi_multi_results$category %like% "week"), "week",
+                                  ifelse((bi_multi_results$category %like% "race"), "race",
+                                  ifelse((bi_multi_results$category %like% "eth"), "eth",
+                                  ifelse((bi_multi_results$category %like% "log_cum_inc"), "log_cum_inc",
+                                  ifelse((bi_multi_results$category %like% "age"), "age",
+                                  ifelse((bi_multi_results$category %like% "univ"), "univ",
+                                  ifelse((bi_multi_results$category %like% "fac_type"), "fac_type",
+                                  ifelse((bi_multi_results$category %like% "fac_size"), "fac_size",
+                                  ifelse((bi_multi_results$category %like% "job_role"), "job_role",
+                                  ifelse((bi_multi_results$category %like% "envir_mod2"), "envir_mod2",
+                                  ifelse((bi_multi_results$category %like% "envir_mod"), "envir_mod",
+                                  ifelse((bi_multi_results$category %like% "envir"), "envir",       
+                                  ifelse((bi_multi_results$category %like% "loc_covid"), "loc_covid",
+                                  ifelse((bi_multi_results$category %like% "loc_ed"), "loc_ed",
+                                  ifelse((bi_multi_results$category %like% "loc_test"), "loc_test",
+                                  ifelse((bi_multi_results$category %like% "occ_cont_mod"), "occ_cont_mod",
+                                  ifelse((bi_multi_results$category %like% "occ_cont"), "occ_cont",
+                                  ifelse((bi_multi_results$category %like% "agp"), "agp",
+                                  ifelse((bi_multi_results$category %like% "com_cont"), "com_cont", 
+                                  ifelse((bi_multi_results$category %like% "sex"), "sex", 
+                                  ifelse((bi_multi_results$category %like% "symp"), "symp",
+                                  ifelse((bi_multi_results$category %like% "prior_test"), "prior_test", NA))))))))))))))))))))))
+
+    # format "category" column
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "race") 
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "sex") 
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "eth") 
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "age") 
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "univ") 
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "fac_type")
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "fac_size") 
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "job_role") 
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "envir_mod2")
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "envir_mod")
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "envir")       
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "loc_covid")       
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "loc_ed")       
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "loc_test") 
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "occ_cont_mod")
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "occ_cont")
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "agp")
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "com_cont")
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "symp")
+      bi_multi_results$category <- str_remove(bi_multi_results$category, "prior_test")
+      
+  # merge univariable and bivariate results       
+    uni_bi_multi_results <- merge(uni_results_combined_table_simp, bi_multi_results, by=c("variable","category"), all.x=TRUE, all.y=TRUE)
+    
+  # format       
+    uni_bi_multi_results$variable <- ifelse((uni_bi_multi_results$variable %like% "week"), "Week of test",
+                                     ifelse((uni_bi_multi_results$variable %like% "race"), "Race",
+                                     ifelse((uni_bi_multi_results$variable %like% "eth"), "Ethnicity",
+                                     ifelse((uni_bi_multi_results$variable %like% "log_cum_inc"), "Cumulative incidence (log10)",
+                                     ifelse((uni_bi_multi_results$variable %like% "age"), "Age group",
+                                     ifelse((uni_bi_multi_results$variable %like% "univ"), "University",
+                                     ifelse((uni_bi_multi_results$variable %like% "fac_type"), "Facility type",
+                                     ifelse((uni_bi_multi_results$variable %like% "fac_size"), "Facility size",
+                                     ifelse((uni_bi_multi_results$variable %like% "job_role"), "Job role",
+                                     ifelse((uni_bi_multi_results$variable %like% "envir_mod2"), "Work environment (modified v2)",
+                                     ifelse((uni_bi_multi_results$variable %like% "envir_mod"), "Work environment (modified)",
+                                     ifelse((uni_bi_multi_results$variable %like% "envir"), "Work environment",       
+                                     ifelse((uni_bi_multi_results$variable %like% "loc_covid"), "Worked in COVID-19 care location",
+                                     ifelse((uni_bi_multi_results$variable %like% "loc_ed"), "Worked in ED",
+                                     ifelse((uni_bi_multi_results$variable %like% "loc_test"), "Worked in COVID-19 testing area",
+                                     ifelse((uni_bi_multi_results$variable %like% "occ_cont_mod"), "COVID-19 patient contact (modified)",
+                                     ifelse((uni_bi_multi_results$variable %like% "occ_cont"), "COVID-19 patient contact",
+                                     ifelse((uni_bi_multi_results$variable %like% "agp"), "Aerosol generating procedures",
+                                     ifelse((uni_bi_multi_results$variable %like% "com_cont"), "Community contact", 
+                                     ifelse((uni_bi_multi_results$variable %like% "sex"), "Sex", 
+                                     ifelse((uni_bi_multi_results$variable %like% "symp"), "Symptoms",
+                                     ifelse((uni_bi_multi_results$variable %like% "prior_test"), "Prior test",
+                                     ifelse((uni_bi_multi_results$variable %like% "result"), "Result", NA)))))))))))))))))))))))
+    # labeling reference groups
+      uni_bi_multi_results$unadj_OR_CI <- ifelse(is.na(uni_bi_multi_results$unadj_OR_CI), "1.0 (ref)", uni_bi_multi_results$unadj_OR_CI)
+      uni_bi_multi_results$adj_OR_CI <- ifelse((uni_bi_multi_results$unadj_OR_CI == "1.0 (ref)") &
+                                               (uni_bi_multi_results$variable == "Sex" |
+                                                uni_bi_multi_results$variable == "Age group" |
+                                                uni_bi_multi_results$variable == "Ethnicity" |
+                                                uni_bi_multi_results$variable == "Race" |
+                                                uni_bi_multi_results$variable == "Cumulative incidence (log10)" |
+                                                uni_bi_multi_results$variable == "Community contact" |
+                                                uni_bi_multi_results$variable == "Job role" |
+                                                uni_bi_multi_results$variable == "Work environment (modified v2)" |
+                                                uni_bi_multi_results$variable == "COVID-19 patient contact (modified)"), 
+                                                "1.0 (ref)", uni_bi_multi_results$adj_OR_CI)
+      uni_bi_multi_results$unadj_OR_CI <- ifelse((uni_bi_multi_results$variable == "Symptoms" & is.na(uni_bi_multi_results$category)), 
+                                                  NA, uni_bi_multi_results$unadj_OR_CI)
+    
+  # ordering the variables/levels
+    variable_order <- c("Sex", "Age group", "Ethnicity", "Race", 
+                        "University", "Facility type", "Facility size",
+                        "Job role",
+                        "Work environment", "Work environment (modified)", "Work environment (modified v2)",
+                        "Worked in COVID-19 care location", "Worked in ED", "Worked in COVID-19 testing area",
+                        "Aerosol generating procedures", "COVID-19 patient contact", "COVID-19 patient contact (modified)",
+                        "Cumulative incidence (log10)", "Community contact", "Symptoms", "Prior test", "Week of test", "Result")
+      
+      
+ # apply orders to dataframe     
+   uni_bi_multi_results$variable <- ordered(uni_bi_multi_results$variable, levels=variable_order)
+   uni_bi_multi_results <- uni_bi_multi_results[with(uni_bi_multi_results, order(variable, category)),]
+      
+  # export full table
+    write.csv(uni_bi_multi_results,"/Users/juliabaker/Box Sync/Combined HCP serosurvey/Analysis/uni_bi_multi_results.csv", row.names = FALSE)
+ 
+    
+  # split by categories of variables to create multiple tables  
+    uni_bi_multi_results_demog    <- uni_bi_multi_results %>% filter(variable == "Sex" | 
+                                                                     variable == "Age group" | 
+                                                                     variable == "Ethnicity" |
+                                                                     variable == "Race")
+    uni_bi_multi_results_fac      <- uni_bi_multi_results %>% filter(variable == "University" | 
+                                                                     variable == "Facility type" | 
+                                                                     variable == "Facility size")
+    uni_bi_multi_results_job_role <- uni_bi_multi_results %>% filter(variable == "Job role")
+    uni_bi_multi_results_envir    <- uni_bi_multi_results %>% filter(variable == "Work environment" | 
+                                                                     variable == "Work environment (modified)" | 
+                                                                     variable == "Work environment (modified v2)")
+    uni_bi_multi_results_loc      <- uni_bi_multi_results %>% filter(variable == "Worked in COVID-19 care location" | 
+                                                                     variable == "Worked in ED" | 
+                                                                     variable == "Worked in COVID-19 testing area")
+    uni_bi_multi_results_occ_exp  <- uni_bi_multi_results %>% filter(variable == "Aerosol generating procedures" | 
+                                                                     variable == "COVID-19 patient contact" | 
+                                                                     variable == "COVID-19 patient contact (modified)")
+    uni_bi_multi_results_other    <- uni_bi_multi_results %>% filter(variable == "Cumulative incidence (log10)" | 
+                                                                     variable == "Community contact" | 
+                                                                     variable == "Symptoms" | 
+                                                                     variable == "Prior test")
+
+  # print tables
+    kable(uni_bi_multi_results_demog, 
+        caption = "Demographics", 
+        format = "html") %>% kable_styling(full_width = T, position = "left")
+    kable(uni_bi_multi_results_fac, 
+        caption = "University & facility", 
+        format = "html") %>% kable_styling(full_width = T, position = "left")
+    kable(uni_bi_multi_results_job_role, 
+        caption = "Job role", 
+        format = "html") %>% kable_styling(full_width = T, position = "left")
+    kable(uni_bi_multi_results_envir, 
+        caption = "Work environment", 
+        format = "html") %>% kable_styling(full_width = T, position = "left")
+    kable(uni_bi_multi_results_loc, 
+        caption = "Work location", 
+        format = "html") %>% kable_styling(full_width = T, position = "left")
+    kable(uni_bi_multi_results_occ_exp, 
+        caption = "Occupational exposure", 
+        format = "html") %>% kable_styling(full_width = T, position = "left")
+    kable(uni_bi_multi_results_other, 
+        caption = "Other", 
+        format = "html") %>% kable_styling(full_width = T, position = "left")
+    
+    
+```
+   
